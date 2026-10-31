@@ -32,7 +32,7 @@ pub struct Attachment {
     pub content: String,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Stats {
     pub created_at: f64,

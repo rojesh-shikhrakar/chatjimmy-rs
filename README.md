@@ -67,3 +67,35 @@ pool doing the same POST-and-read-body, best of 5.
 | 128 | 32 | 31 ms (4129 req/s) | 287 ms (446 req/s) |
 
 Numbers are from one machine and one run; rerun both for your own.
+
+## CLI
+
+```
+cargo install --path crates/cli     # installs `chatjimmy`
+
+chatjimmy ask "Explain recursion"          # whole reply at once
+chatjimmy ask "Write a haiku" --stream     # print as it arrives
+echo "hi" | chatjimmy ask -                # prompt from stdin
+chatjimmy ask "hi" --stats                 # stats JSON on stderr
+chatjimmy batch prompts.txt -c 16          # many prompts, JSONL out (stdin if no file)
+```
+
+Shared options: `--model`, `--system`, `--top-k`, `--base-url`.
+
+### Batch
+
+Each non-blank input line is a plain prompt, or a JSON object with a string `prompt` and optional `id`,
+`system_prompt`, `model`, `top_k` (these override the shared options). Detection is per line, so a plain prompt
+that is itself a JSON object with a `prompt` field is treated as a request.
+
+One JSON line per request is written to stdout as each finishes (completion order):
+
+```
+{"index":0,"id":"x","ok":true,"text":"...","stats":{...}}
+{"index":1,"ok":false,"error":"..."}
+```
+
+`index` is the 0-based position among non-blank input lines; `id` (a string or number) is echoed unchanged and appears only if the request had one, including on error records. A leading UTF-8 BOM is ignored.
+Exit codes: `0` all succeeded, `2` some failed (including unparseable lines), `1` fatal (unreadable file, bad
+arguments). `ask` exits `0` or `1`. Errors go to stderr as `chatjimmy: error: ...`. The whole input is read into
+memory before the run starts.

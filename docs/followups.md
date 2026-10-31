@@ -10,3 +10,13 @@ Minor findings from the whole-branch review, deferred on purpose. Each is small;
 - [ ] Decide whether a real total timeout (wrapping the retry loop) is wanted; `.timeout()` is per attempt today.
 - [ ] Decide whether a body with no stats block should be an `Error::Truncated` (proxy-truncation case).
 - [ ] Revisit the 8-byte streaming holdback only if final-token latency is reported.
+
+## CLI (from the chatjimmy-cli review)
+
+- [ ] `ask`: trim the argument prompt like the stdin prompt (`ask "   "` currently sends spaces).
+- [ ] Validate `--base-url` (http/https) up front so a typo is one fatal error, not one error record per line.
+- [ ] `ask --stats` prints nothing when the reply has no stats; print `null` or a note.
+- [ ] A mid-`--stream` failure leaves the error on the same line as partial text; emit a newline first.
+- [ ] Batch exits 0 after a closed pipe even if already-written records had failed (spec says "stop quietly").
+- [ ] Warn on unknown JSON keys in batch requests (typo like `sytem_prompt` is silently ignored).
+- [ ] README: mention `-c 0` means 1, and that batch exits 0 when the reader closes the pipe.
