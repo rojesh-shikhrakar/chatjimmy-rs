@@ -17,6 +17,8 @@ struct State {
 
 impl Client {
     /// Opt-in streaming. Yields `Chunk::Text` as it arrives, then `Chunk::Done(stats)`.
+    /// `Done` is not guaranteed: a body that ends without a stats block (for example a
+    /// connection closed early behind a proxy) just ends the stream.
     /// Retries only happen before the first byte; a mid-body failure is yielded as `Err`.
     pub async fn chat_stream(&self, req: ChatRequest) -> Result<ChatStream> {
         let resp = self.post_chat(&req).await?;

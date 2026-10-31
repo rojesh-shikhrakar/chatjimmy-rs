@@ -44,7 +44,7 @@ impl ClientBuilder {
         self.read_timeout = d;
         self
     }
-    /// Total request timeout. Unset by default.
+    /// Timeout for each attempt, including its body. Unset by default. Retries restart it.
     pub fn timeout(mut self, d: Duration) -> Self {
         self.timeout = Some(d);
         self
@@ -116,8 +116,7 @@ impl Client {
             if !retryable || attempt >= self.inner.max_retries {
                 return result;
             }
-            let base = self.inner.retry_base_delay * 2u32.saturating_pow(attempt);
-            tokio::time::sleep(base + base.mul_f64(fastrand::f64() * 0.5)).await;
+            tokio::time::sleep(backoff(self.inner.retry_base_delay, attempt)).await;
             attempt += 1;
         }
     }
@@ -152,12 +151,22 @@ impl Client {
     pub async fn models(&self) -> Result<Vec<Model>> {
         #[derive(serde::Deserialize)]
         struct Models {
-            #[serde(default)]
             data: Vec<Model>,
         }
         let resp = self.send_with_retry(|| self.inner.http.get(self.url("/api/models"))).await?;
         Ok(resp.json::<Models>().await?.data)
     }
+}
+
+const MAX_BACKOFF: Duration = Duration::from_secs(30);
+
+/// `base * 2^attempt`, capped at `MAX_BACKOFF`, plus up to 50% jitter.
+fn backoff(base: Duration, attempt: u32) -> Duration {
+    let delay = base
+        .checked_mul(2u32.saturating_pow(attempt))
+        .unwrap_or(MAX_BACKOFF)
+        .min(MAX_BACKOFF);
+    delay + delay.mul_f64(fastrand::f64() * 0.5)
 }
 
 async fn check_status(resp: reqwest::Response) -> Result<reqwest::Response> {
@@ -167,4 +176,17 @@ async fn check_status(resp: reqwest::Response) -> Result<reqwest::Response> {
     }
     let body = resp.text().await.unwrap_or_default();
     Err(Error::Status { code: status.as_u16(), body })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backoff_is_capped_and_never_overflows() {
+        let base = Duration::from_millis(200);
+        assert!(backoff(base, 0) >= base);
+        assert!(backoff(base, 20) <= MAX_BACKOFF.mul_f64(1.5));
+        let _ = backoff(Duration::MAX, 40); // must not panic
+    }
 }

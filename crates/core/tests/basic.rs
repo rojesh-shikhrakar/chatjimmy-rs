@@ -123,3 +123,14 @@ async fn health_non_json_is_error() {
         .await;
     assert!(client(&server).await.health().await.is_err());
 }
+
+#[tokio::test]
+async fn models_wrong_shape_is_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"error":"down"}"#))
+        .mount(&server)
+        .await;
+    assert!(client(&server).await.models().await.is_err());
+}

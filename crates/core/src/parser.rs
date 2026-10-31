@@ -57,15 +57,32 @@ impl Parser {
         if !self.raw.is_empty() {
             return Err(Error::Decode);
         }
-        let rest = std::mem::take(&mut self.held);
-        self.emitted += rest.len();
-        let stats = match &self.stats_buf {
-            Some(buf) => {
-                let json = buf.split(END).next().unwrap_or("");
-                Some(serde_json::from_str(json).map_err(Error::BadStats)?)
+        let mut rest = std::mem::take(&mut self.held);
+        // The real stats block is the last START..END pair at the end of the body. A START
+        // inside the reply, or one with no END after it, is ordinary text. Anything after
+        // END is dropped.
+        let mut stats = None;
+        if let Some(buf) = &self.stats_buf {
+            match buf.rfind(END) {
+                None => {
+                    rest.push_str(START);
+                    rest.push_str(buf);
+                }
+                Some(end) => {
+                    let head = &buf[..end];
+                    let json = match head.rsplit_once(START) {
+                        Some((text, json)) => {
+                            rest.push_str(START);
+                            rest.push_str(text);
+                            json
+                        }
+                        None => head,
+                    };
+                    stats = Some(serde_json::from_str(json).map_err(Error::BadStats)?);
+                }
             }
-            None => None,
-        };
+        }
+        self.emitted += rest.len();
         if self.emitted == 0 && stats.is_none() {
             return Err(Error::EmptyResponse);
         }
@@ -146,6 +163,21 @@ mod tests {
         let mut p = Parser::new();
         let out = p.push(b"abc<|sta").unwrap();
         assert!(!out.contains("<|sta"), "emitted {out:?}");
+    }
+
+    #[test]
+    fn marker_in_reply_is_text() {
+        let (t, s) =
+            run(&[b"use <|stats|> marker<|stats|>{\"decode_tokens\":1}<|/stats|>"]).unwrap();
+        assert_eq!(t, "use <|stats|> marker");
+        assert_eq!(s.unwrap().decode_tokens, 1);
+    }
+
+    #[test]
+    fn marker_without_end_is_text() {
+        let (t, s) = run(&[b"use <|stats|> only"]).unwrap();
+        assert_eq!(t, "use <|stats|> only");
+        assert!(s.is_none());
     }
 
     #[test]
