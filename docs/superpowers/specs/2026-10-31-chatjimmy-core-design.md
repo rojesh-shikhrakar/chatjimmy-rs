@@ -1,4 +1,4 @@
-# chatjimmy-core: Rust rewrite, sub-project 1
+# chatjimmy-core
 
 ## Context
 
