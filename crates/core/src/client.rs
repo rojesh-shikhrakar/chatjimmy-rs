@@ -11,9 +11,7 @@ pub const BASE_URL: &str = "https://chatjimmy.ai";
 struct Inner {
     http: reqwest::Client,
     base_url: String,
-    #[allow(dead_code)] // used by retries (Task 4)
     max_retries: u32,
-    #[allow(dead_code)]
     retry_base_delay: Duration,
 }
 
@@ -99,15 +97,34 @@ impl Client {
         format!("{}{}", self.inner.base_url, path)
     }
 
+    /// Send with retries on connect errors, timeouts, 429 and 5xx; other failures return at once.
+    async fn send_with_retry(
+        &self,
+        build: impl Fn() -> reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response> {
+        let mut attempt = 0;
+        loop {
+            let result = match build().send().await {
+                Ok(resp) => check_status(resp).await,
+                Err(e) => Err(Error::Http(e)),
+            };
+            let retryable = match &result {
+                Err(Error::Http(e)) => e.is_connect() || e.is_timeout(),
+                Err(Error::Status { code, .. }) => *code == 429 || *code >= 500,
+                _ => false,
+            };
+            if !retryable || attempt >= self.inner.max_retries {
+                return result;
+            }
+            let base = self.inner.retry_base_delay * 2u32.saturating_pow(attempt);
+            tokio::time::sleep(base + base.mul_f64(fastrand::f64() * 0.5)).await;
+            attempt += 1;
+        }
+    }
+
     pub(crate) async fn post_chat(&self, req: &ChatRequest) -> Result<reqwest::Response> {
-        let resp = self
-            .inner
-            .http
-            .post(self.url("/api/chat"))
-            .json(&req.body())
-            .send()
-            .await?;
-        check_status(resp).await
+        let body = req.body();
+        self.send_with_retry(|| self.inner.http.post(self.url("/api/chat")).json(&body)).await
     }
 
     pub async fn chat(&self, req: ChatRequest) -> Result<ChatResponse> {
@@ -128,8 +145,8 @@ impl Client {
     }
 
     pub async fn health(&self) -> Result<HealthStatus> {
-        let resp = self.inner.http.get(self.url("/api/health")).send().await?;
-        Ok(check_status(resp).await?.json().await?)
+        let resp = self.send_with_retry(|| self.inner.http.get(self.url("/api/health"))).await?;
+        Ok(resp.json().await?)
     }
 
     pub async fn models(&self) -> Result<Vec<Model>> {
@@ -138,8 +155,8 @@ impl Client {
             #[serde(default)]
             data: Vec<Model>,
         }
-        let resp = self.inner.http.get(self.url("/api/models")).send().await?;
-        Ok(check_status(resp).await?.json::<Models>().await?.data)
+        let resp = self.send_with_retry(|| self.inner.http.get(self.url("/api/models"))).await?;
+        Ok(resp.json::<Models>().await?.data)
     }
 }
 
