@@ -12,13 +12,29 @@ pub struct Defaults {
 }
 
 /// A line is a request if it is a JSON object with a `prompt` key; otherwise it is a plain prompt.
-/// Returns the request and its optional `id`; `Err` is the message for the error record.
-pub fn parse_line(line: &str, d: &Defaults) -> Result<(ChatRequest, Option<String>), String> {
+/// Returns the request and its optional `id` (a string or number, echoed unchanged). `Err` carries
+/// the `id` when one could be read, plus the message for the error record.
+pub fn parse_line(
+    line: &str,
+    d: &Defaults,
+) -> Result<(ChatRequest, Option<Value>), (Option<Value>, String)> {
     let line = line.trim_end_matches('\r');
     let obj = match serde_json::from_str::<Value>(line) {
         Ok(Value::Object(o)) if o.contains_key("prompt") => o,
         _ => return Ok((request(line, &d.model, &d.system_prompt, d.top_k), None)),
     };
+    let id = match obj.get("id") {
+        None => None,
+        Some(v @ (Value::String(_) | Value::Number(_))) => Some(v.clone()),
+        Some(_) => return Err((None, "`id` must be a string or number".into())),
+    };
+    match request_from(&obj, d) {
+        Ok(req) => Ok((req, id)),
+        Err(msg) => Err((id, msg)),
+    }
+}
+
+fn request_from(obj: &Map<String, Value>, d: &Defaults) -> Result<ChatRequest, String> {
     let str_field = |key: &str| -> Result<Option<String>, String> {
         match obj.get(key) {
             None => Ok(None),
@@ -26,7 +42,7 @@ pub fn parse_line(line: &str, d: &Defaults) -> Result<(ChatRequest, Option<Strin
             Some(_) => Err(format!("`{key}` must be a string")),
         }
     };
-    let prompt = str_field("prompt")?.expect("key checked above");
+    let prompt = str_field("prompt")?.expect("key checked by caller");
     let top_k = match obj.get("top_k") {
         None => d.top_k,
         Some(v) => v
@@ -36,7 +52,7 @@ pub fn parse_line(line: &str, d: &Defaults) -> Result<(ChatRequest, Option<Strin
     };
     let model = str_field("model")?.unwrap_or_else(|| d.model.clone());
     let system = str_field("system_prompt")?.unwrap_or_else(|| d.system_prompt.clone());
-    Ok((request(&prompt, &model, &system, top_k), str_field("id")?))
+    Ok(request(&prompt, &model, &system, top_k))
 }
 
 fn request(prompt: &str, model: &str, system: &str, top_k: u32) -> ChatRequest {
@@ -45,8 +61,8 @@ fn request(prompt: &str, model: &str, system: &str, top_k: u32) -> ChatRequest {
 
 /// One JSONL output line.
 pub enum Record {
-    Ok { index: usize, id: Option<String>, text: String, stats: Option<Stats> },
-    Err { index: usize, id: Option<String>, error: String },
+    Ok { index: usize, id: Option<Value>, text: String, stats: Option<Stats> },
+    Err { index: usize, id: Option<Value>, error: String },
 }
 
 impl Record {
@@ -57,7 +73,7 @@ impl Record {
         };
         m.insert("index".into(), json!(index));
         if let Some(id) = id {
-            m.insert("id".into(), json!(id));
+            m.insert("id".into(), id.clone());
         }
         match self {
             Record::Ok { text, stats, .. } => {
@@ -90,7 +106,7 @@ pub async fn run_batch(
 ) -> std::io::Result<bool> {
     let mut all_ok = true;
     let mut reqs = Vec::new();
-    let mut meta: Vec<(usize, Option<String>)> = Vec::new(); // submission index -> (line index, id)
+    let mut meta: Vec<(usize, Option<Value>)> = Vec::new(); // submission index -> (line index, id)
     let mut index = 0;
     for line in lines {
         if line.trim().is_empty() {
@@ -103,9 +119,9 @@ pub async fn run_batch(
                 reqs.push(req);
                 meta.push((i, id));
             }
-            Err(error) => {
+            Err((id, error)) => {
                 all_ok = false;
-                write_record(out, &Record::Err { index: i, id: None, error })?;
+                write_record(out, &Record::Err { index: i, id, error })?;
             }
         }
     }
@@ -152,7 +168,7 @@ mod tests {
         let (r, id) = parse_line(line, &d()).unwrap();
         assert_eq!(prompt(&r), "p");
         assert_eq!((r.model.as_str(), r.system_prompt.as_str(), r.top_k), ("m", "s", 3));
-        assert_eq!(id.as_deref(), Some("x"));
+        assert_eq!(id, Some(json!("x")));
     }
 
     #[test]
@@ -187,7 +203,7 @@ mod tests {
     fn crlf_is_trimmed() {
         assert_eq!(prompt(&parse_line("hi\r", &d()).unwrap().0), "hi");
         let (_, id) = parse_line("{\"prompt\":\"p\",\"id\":\"i\"}\r", &d()).unwrap();
-        assert_eq!(id.as_deref(), Some("i"));
+        assert_eq!(id, Some(json!("i")));
     }
 
     #[test]
@@ -198,7 +214,7 @@ mod tests {
 
     #[test]
     fn record_ok_shape() {
-        let r = Record::Ok { index: 3, id: Some("x".into()), text: "t".into(), stats: None };
+        let r = Record::Ok { index: 3, id: Some(json!("x")), text: "t".into(), stats: None };
         assert_eq!(r.to_line(), r#"{"index":3,"id":"x","ok":true,"text":"t","stats":null}"#);
     }
 
@@ -275,5 +291,25 @@ mod tests {
         let by = |i: u64| recs.iter().find(|r| r["index"] == i).unwrap();
         assert_eq!((by(0)["text"].as_str(), by(0).get("id")), (Some("RA"), None));
         assert_eq!((by(1)["text"].as_str(), by(1)["id"].as_str()), (Some("RB"), Some("B")));
+    }
+
+    #[test]
+    fn error_keeps_the_id() {
+        let (id, msg) = parse_line(r#"{"prompt":5,"id":"bad0"}"#, &d()).unwrap_err();
+        assert_eq!(id, Some(json!("bad0")));
+        assert!(msg.contains("prompt"));
+    }
+
+    #[test]
+    fn numeric_id_is_echoed_unchanged() {
+        let (_, id) = parse_line(r#"{"prompt":"p","id":7}"#, &d()).unwrap();
+        assert_eq!(id, Some(json!(7)));
+        let r = Record::Err { index: 0, id, error: "e".into() };
+        assert_eq!(r.to_line(), r#"{"index":0,"id":7,"ok":false,"error":"e"}"#);
+    }
+
+    #[test]
+    fn non_scalar_id_is_error() {
+        assert!(parse_line(r#"{"prompt":"p","id":[1]}"#, &d()).is_err());
     }
 }

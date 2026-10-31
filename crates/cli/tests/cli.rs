@@ -186,3 +186,36 @@ async fn closed_stdout_exits_quietly() {
     assert_eq!(o.status.code(), Some(0), "{}", err(&o));
     assert_eq!(err(&o), "");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn usage_error_exits_1_and_help_exits_0() {
+    let s = server().await;
+    assert_eq!(cli(&s, &["bogus"], "").status.code(), Some(1));
+    assert_eq!(cli(&s, &["batch", "-c", "-1"], "").status.code(), Some(1));
+    assert_eq!(cli(&s, &["--help"], "").status.code(), Some(0));
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn ask_write_error_is_fatal() {
+    let s = server().await;
+    let o = Command::new(env!("CARGO_BIN_EXE_chatjimmy"))
+        .args(["ask", "hi", "--base-url", &s.uri()])
+        .stdout(std::fs::File::create("/dev/full").unwrap())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(1), "{}", err(&o));
+    assert!(err(&o).starts_with("chatjimmy: error:"), "{}", err(&o));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_ignores_utf8_bom() {
+    let s = server().await;
+    let path = std::env::temp_dir().join(format!("chatjimmy-bom-{}.txt", std::process::id()));
+    std::fs::write(&path, b"\xEF\xBB\xBF{\"prompt\":\"p\",\"id\":\"X\"}\r\n").unwrap();
+    let o = cli(&s, &["batch", path.to_str().unwrap()], "");
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    assert_eq!(records(&o)[0]["id"], "X");
+}

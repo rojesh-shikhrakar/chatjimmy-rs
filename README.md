@@ -95,7 +95,7 @@ One JSON line per request is written to stdout as each finishes (completion orde
 {"index":1,"ok":false,"error":"..."}
 ```
 
-`index` is the 0-based position among non-blank input lines; `id` appears only if the request had one.
+`index` is the 0-based position among non-blank input lines; `id` (a string or number) is echoed unchanged and appears only if the request had one, including on error records. A leading UTF-8 BOM is ignored.
 Exit codes: `0` all succeeded, `2` some failed (including unparseable lines), `1` fatal (unreadable file, bad
 arguments). `ask` exits `0` or `1`. Errors go to stderr as `chatjimmy: error: ...`. The whole input is read into
 memory before the run starts.
