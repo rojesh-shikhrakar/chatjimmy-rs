@@ -1,3 +1,4 @@
+mod batch;
 mod client;
 mod error;
 mod parser;
