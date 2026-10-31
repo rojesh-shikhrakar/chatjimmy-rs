@@ -131,3 +131,58 @@ async fn batch_concurrency_zero_completes() {
     assert_eq!(o.status.code(), Some(0), "{}", err(&o));
     assert_eq!(records(&o).len(), 2);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_missing_file_exit_1() {
+    let s = server().await;
+    let o = cli(&s, &["batch", "/nonexistent/prompts.txt"], "");
+    assert_eq!(o.status.code(), Some(1));
+    assert!(err(&o).starts_with("chatjimmy: error:") && err(&o).contains("/nonexistent/prompts.txt"), "{}", err(&o));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_invalid_utf8_file_exit_1() {
+    let s = server().await;
+    let path = std::env::temp_dir().join(format!("chatjimmy-bad-utf8-{}.txt", std::process::id()));
+    std::fs::write(&path, [0xff, 0xfe]).unwrap();
+    let o = cli(&s, &["batch", path.to_str().unwrap()], "");
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    assert!(err(&o).starts_with("chatjimmy: error:") && !err(&o).contains("panicked"), "{}", err(&o));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_reads_file_argument() {
+    let s = server().await;
+    let path = std::env::temp_dir().join(format!("chatjimmy-prompts-{}.txt", std::process::id()));
+    std::fs::write(&path, "a\nb\n").unwrap();
+    let o = cli(&s, &["batch", path.to_str().unwrap()], "");
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    assert_eq!(records(&o).len(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn closed_stdout_exits_quietly() {
+    use std::io::{BufRead, BufReader};
+    let s = MockServer::start().await;
+    let big = format!("{}<|stats|>{{}}<|/stats|>", "x".repeat(200_000)); // exceeds the pipe buffer
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(big))
+        .mount(&s)
+        .await;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_chatjimmy"))
+        .args(["batch", "-c", "2", "--base-url", &s.uri()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all("p\n".repeat(20).as_bytes()).unwrap();
+    let mut first = String::new();
+    BufReader::new(child.stdout.take().unwrap()).read_line(&mut first).unwrap(); // then drop: pipe closes
+    let o = child.wait_with_output().unwrap();
+    assert!(!first.is_empty());
+    assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+    assert_eq!(err(&o), "");
+}

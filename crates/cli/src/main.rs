@@ -84,6 +84,8 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             match batch::run_batch(&client, lines, &defaults, concurrency, &mut out).await {
                 Ok(true) => Ok(ExitCode::SUCCESS),
                 Ok(false) => Ok(ExitCode::from(2)),
+                // The reader closed the pipe (e.g. `| head`): stop quietly.
+                Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(ExitCode::SUCCESS),
                 Err(e) => Err(e.to_string()),
             }
         }
