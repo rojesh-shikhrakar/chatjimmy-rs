@@ -49,7 +49,7 @@ pub async fn run(client: &Client, prompt: &str, o: &Opts<'_>) -> Result<(), Stri
 
 /// Writes to stdout. `Ok(false)` means the reader closed the pipe (stop quietly); other write
 /// errors are real failures.
-fn emit(text: &str) -> Result<bool, String> {
+pub fn emit(text: &str) -> Result<bool, String> {
     let mut out = std::io::stdout();
     match out.write_all(text.as_bytes()).and_then(|_| out.flush()) {
         Ok(()) => Ok(true),

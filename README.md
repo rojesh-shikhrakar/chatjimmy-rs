@@ -77,10 +77,20 @@ chatjimmy ask "Explain recursion"          # whole reply at once
 chatjimmy ask "Write a haiku" --stream     # print as it arrives
 echo "hi" | chatjimmy ask -                # prompt from stdin
 chatjimmy ask "hi" --stats                 # stats JSON on stderr
+chatjimmy chat                             # interactive multi-turn chat
 chatjimmy batch prompts.txt -c 16          # many prompts, JSONL out (stdin if no file)
 ```
 
 Shared options: `--model`, `--system`, `--top-k`, `--base-url`.
+
+### Chat
+
+`chatjimmy chat` reads one message per line from stdin and streams each reply to stdout. Every request carries
+the full conversation history. `/reset` clears it, `/exit` (or `/quit`, or EOF) quits. The `> ` prompt goes to
+stderr and only when stdin is a terminal, so piping works (`printf 'hi\nand again?\n' | chatjimmy chat`).
+A failed turn prints `chatjimmy: error: ...` to stderr, is dropped from the history, and the session continues.
+Set `--system`, `--model`, `--top-k` up front; history is in memory only and grows until `/reset`
+(very long chats will hit the ~6k-token input limit).
 
 ### Batch
 

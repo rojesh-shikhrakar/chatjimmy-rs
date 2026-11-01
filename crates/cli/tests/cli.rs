@@ -219,3 +219,26 @@ async fn batch_ignores_utf8_bom() {
     assert_eq!(o.status.code(), Some(0), "{}", err(&o));
     assert_eq!(records(&o)[0]["id"], "X");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_sends_history_and_reset_clears_it() {
+    let s = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(OK_BODY))
+        .mount(&s)
+        .await;
+    let o = cli(&s, &["--system", "be brief", "chat"], "one\ntwo\n/reset\nthree\n");
+    assert!(o.status.success(), "{}", err(&o));
+    assert_eq!(out(&o), "hi there\n".repeat(3));
+    let bodies: Vec<String> = s
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| String::from_utf8(r.body.clone()).unwrap())
+        .collect();
+    assert_eq!(bodies.len(), 3);
+    assert!(bodies[1].contains(r#""content":"one""#) && bodies[1].contains(r#""content":"hi there""#));
+    assert!(bodies[1].contains(r#""systemPrompt":"be brief""#));
+    assert!(!bodies[2].contains(r#""content":"one""#));
+}

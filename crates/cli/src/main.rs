@@ -1,5 +1,6 @@
 mod ask;
 mod batch;
+mod chat;
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -35,6 +36,9 @@ enum Command {
         #[arg(long)]
         stats: bool,
     },
+    /// Interactive multi-turn chat; reads one message per line from stdin and remembers the
+    /// conversation. Set --system/--model/--top-k up front. `/reset` clears history, `/exit` quits.
+    Chat,
     /// Run many prompts concurrently; one JSON record per request on stdout.
     Batch {
         /// Input file (default: stdin). One plain prompt or JSON request per line.
@@ -79,6 +83,11 @@ async fn run(cli: Cli) -> Result<ExitCode, String> {
             }
             let opts = ask::Opts { model: &cli.model, system: &cli.system, top_k: cli.top_k, stream, stats };
             ask::run(&client, &prompt, &opts).await?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Chat => {
+            let opts = ask::Opts { model: &cli.model, system: &cli.system, top_k: cli.top_k, stream: true, stats: false };
+            chat::run(&client, &opts, std::io::stdin().lock()).await?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Batch { file, concurrency } => {
